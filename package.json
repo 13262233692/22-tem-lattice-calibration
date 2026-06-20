@@ -1,0 +1,59 @@
+{
+  "name": "tem-lattice-calibration",
+  "version": "1.0.0",
+  "description": "TEM Lattice Calibration Software - 材料科学实验室专用电子显微镜上位机软件",
+  "main": "electron/main.js",
+  "scripts": {
+    "build:addon": "node-gyp rebuild --release",
+    "dev:vite": "vite",
+    "build:vite": "vite build",
+    "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:electron": "wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
+    "build": "npm run build:vite && electron-builder",
+    "build:all": "npm run build:addon && npm run build:vite && electron-builder",
+    "start": "electron .",
+    "postinstall": "electron-builder install-app-deps",
+    "install:skip-gyp": "npm install --ignore-scripts",
+    "generate:test-images": "python scripts/generate_test_tiff.py"
+  },
+  "author": "Material Science Lab",
+  "license": "MIT",
+  "dependencies": {
+    "bindings": "^1.5.0",
+    "node-addon-api": "^7.1.0",
+    "pngjs": "^7.0.0",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0",
+    "pinia": "^2.1.7",
+    "element-plus": "^2.6.3",
+    "@element-plus/icons-vue": "^2.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "vite": "^5.2.8",
+    "electron": "^29.1.5",
+    "electron-builder": "^24.13.3",
+    "node-gyp": "^10.0.1",
+    "concurrently": "^8.2.2",
+    "wait-on": "^7.2.0",
+    "cross-env": "^7.0.3",
+    "@types/node": "^20.11.30"
+  },
+  "gypfile": true,
+  "build": {
+    "appId": "com.matsci.temcalibration",
+    "productName": "TEM Lattice Calibration",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "build/Release/**/*.node",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}
