@@ -7,14 +7,19 @@ export const useImageStore = defineStore('image', () => {
   const imageData = ref(null)
   const imageTiles = ref([])
   const fftResult = ref(null)
+  const fftSpectrumBuffer = ref(null)
   const isLoading = ref(false)
   const loadingText = ref('')
+  const loadingProgress = ref(0)
   const addonStatus = ref({ loaded: false })
   const systemInfo = ref(null)
   const sharedMemoryName = ref('Local\\TEM_Image_Buffer')
+  const fftComputeTimeMs = ref(0)
+  const spectrumMemName = ref(null)
   
   const isImageLoaded = computed(() => imageInfo.value !== null)
   const isFFTReady = computed(() => fftResult.value !== null)
+  const isFFTComputing = computed(() => isLoading.value && loadingText.value.includes('FFT'))
   
   const fileSize = computed(() => {
     if (!imageInfo.value) return 0
@@ -51,17 +56,20 @@ export const useImageStore = defineStore('image', () => {
   async function loadTiff(filePath) {
     isLoading.value = true
     loadingText.value = '正在解析 TIFF 图像...'
+    loadingProgress.value = 10
     currentFile.value = filePath
     
     try {
       const info = await window.electronAPI.loadTiff(filePath)
       imageInfo.value = info
+      loadingProgress.value = 40
       
       loadingText.value = '正在转码为 WebP 格式...'
       const webpData = await window.electronAPI.getTiffWebP(filePath, 90)
       
       const blob = new Blob([new Uint8Array(webpData.data)], { type: webpData.type })
       imageData.value = URL.createObjectURL(blob)
+      loadingProgress.value = 70
       
       if (info.width > 4096 || info.height > 4096) {
         loadingText.value = '正在生成图像分片...'
@@ -72,6 +80,7 @@ export const useImageStore = defineStore('image', () => {
         })
       }
       
+      loadingProgress.value = 100
       isLoading.value = false
       loadingText.value = ''
       
@@ -84,46 +93,114 @@ export const useImageStore = defineStore('image', () => {
     }
   }
 
+  async function releaseSpectrumMemory() {
+    if (spectrumMemName.value) {
+      try {
+        await window.electronAPI.releaseSpectrum(spectrumMemName.value)
+      } catch (e) {
+        console.warn('Failed to release spectrum memory:', e)
+      }
+      spectrumMemName.value = null
+    }
+    fftSpectrumBuffer.value = null
+  }
+
+  async function loadSpectrumPixels() {
+    if (!spectrumMemName.value || !fftResult.value) {
+      return null
+    }
+    
+    try {
+      const buffer = await window.electronAPI.readSpectrumBuffer(
+        spectrumMemName.value,
+        fftResult.value.width,
+        fftResult.value.height
+      )
+      fftSpectrumBuffer.value = new Uint8ClampedArray(buffer)
+      return fftSpectrumBuffer.value
+    } catch (e) {
+      console.error('Failed to load spectrum pixels from shared memory:', e)
+      return null
+    }
+  }
+
   async function computeFFT(useSharedMemory = false) {
     if (!currentFile.value) {
       return { success: false, error: '未加载图像' }
     }
     
+    await releaseSpectrumMemory()
+    
     isLoading.value = true
-    loadingText.value = useSharedMemory 
-      ? '正在通过共享内存执行 2D-FFT 变换...' 
-      : '正在执行 2D-FFT 变换...'
+    loadingProgress.value = 5
+    
+    if (useSharedMemory) {
+      loadingText.value = 'C++ 线程池正在写入原始图像到共享内存...'
+    } else {
+      loadingText.value = 'C++ Worker 线程池正在异步执行 2D-FFT...'
+    }
     
     try {
-      let result
+      let metaResult
+      loadingProgress.value = 15
       
       if (useSharedMemory) {
-        loadingText.value = '正在写入共享内存...'
+        loadingText.value = 'C++ 线程池：原始图像 → 共享内存...'
         const writeResult = await window.electronAPI.writeImageToShared(
           sharedMemoryName.value, 
           currentFile.value
         )
+        loadingProgress.value = 30
         
-        loadingText.value = '正在从共享内存执行 FFT...'
-        result = await window.electronAPI.computeFFTFromShared(
+        loadingText.value = 'C++ 线程池：从共享内存执行异步 FFT 变换...'
+        metaResult = await window.electronAPI.computeFFTFromSharedAsync(
           sharedMemoryName.value,
           imageInfo.value.width,
           imageInfo.value.height
         )
         
-        await window.electronAPI.closeSharedMemory(
-          sharedMemoryName.value,
-          writeResult.dataSize
-        )
+        try {
+          await window.electronAPI.closeSharedMemory(
+            sharedMemoryName.value,
+            writeResult.dataSize
+          )
+        } catch (e) { /* ignore */ }
       } else {
-        result = await window.electronAPI.computeFFT(currentFile.value)
+        loadingText.value = 'C++ 线程池：异步执行 2D-FFT（零拷贝共享内存输出）...'
+        metaResult = await window.electronAPI.computeFFTAsync(currentFile.value)
       }
       
-      fftResult.value = result
+      loadingProgress.value = 75
+      
+      if (!metaResult || !metaResult.success) {
+        throw new Error(metaResult?.errorMessage || 'FFT 计算失败')
+      }
+      
+      fftComputeTimeMs.value = metaResult.computeTimeMs || 0
+      spectrumMemName.value = metaResult.spectrumMemName
+      
+      loadingText.value = `FFT 完成 (${fftComputeTimeMs.value}ms)，正在读取频谱纹理...`
+      
+      const normalizedResult = {
+        width: metaResult.spectrumWidth,
+        height: metaResult.spectrumHeight,
+        dominantFrequency: metaResult.dominantFrequency,
+        latticeSpacing: metaResult.latticeSpacing,
+        diffractionSpots: metaResult.diffractionSpots || []
+      }
+      
+      fftResult.value = normalizedResult
+      
+      loadingProgress.value = 90
+      loadingText.value = '正在上传到 GPU 纹理...'
+      
+      await loadSpectrumPixels()
+      
+      loadingProgress.value = 100
       isLoading.value = false
       loadingText.value = ''
       
-      return { success: true, result }
+      return { success: true, result: normalizedResult, computeTimeMs: fftComputeTimeMs.value }
     } catch (err) {
       isLoading.value = false
       loadingText.value = ''
@@ -132,11 +209,17 @@ export const useImageStore = defineStore('image', () => {
     }
   }
 
+  function clearFFT() {
+    releaseSpectrumMemory()
+    fftResult.value = null
+  }
+
   function clearImage() {
     if (imageData.value) {
       URL.revokeObjectURL(imageData.value)
     }
     imageTiles.value.forEach(tile => URL.revokeObjectURL(tile))
+    releaseSpectrumMemory()
     
     currentFile.value = null
     imageInfo.value = null
@@ -151,19 +234,27 @@ export const useImageStore = defineStore('image', () => {
     imageData,
     imageTiles,
     fftResult,
+    fftSpectrumBuffer,
     isLoading,
     loadingText,
+    loadingProgress,
     addonStatus,
     systemInfo,
     sharedMemoryName,
+    fftComputeTimeMs,
+    spectrumMemName,
     isImageLoaded,
     isFFTReady,
+    isFFTComputing,
     fileSize,
     formattedFileSize,
     loadAddonStatus,
     loadSystemInfo,
     loadTiff,
     computeFFT,
-    clearImage
+    clearFFT,
+    clearImage,
+    loadSpectrumPixels,
+    releaseSpectrumMemory
   }
 })

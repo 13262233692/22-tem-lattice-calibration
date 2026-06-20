@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   computeFFT: (filePath) => ipcRenderer.invoke('fft:compute', filePath),
   computeFFTFromShared: (memName, width, height) => ipcRenderer.invoke('fft:computeFromShared', memName, width, height),
   
+  computeFFTAsync: (filePath) => ipcRenderer.invoke('fft:computeAsync', filePath),
+  computeFFTFromSharedAsync: (memName, width, height) => ipcRenderer.invoke('fft:computeFromSharedAsync', memName, width, height),
+  readSpectrumBuffer: (memName, width, height) => ipcRenderer.invoke('spectrum:readBuffer', memName, width, height),
+  releaseSpectrum: (memName) => ipcRenderer.invoke('spectrum:release', memName),
+  
   createSharedMemory: (name, size) => ipcRenderer.invoke('sharedmemory:create', name, size),
   writeImageToShared: (memName, imagePath) => ipcRenderer.invoke('sharedmemory:writeImage', memName, imagePath),
   closeSharedMemory: (name, size) => ipcRenderer.invoke('sharedmemory:close', name, size),

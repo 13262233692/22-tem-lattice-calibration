@@ -18,7 +18,8 @@
         "src/addon/main.cpp",
         "src/addon/TiffProcessor.cpp",
         "src/addon/FFTProcessor.cpp",
-        "src/addon/SharedMemory.cpp"
+        "src/addon/SharedMemory.cpp",
+        "src/addon/AsyncFFTWorker.cpp"
       ],
       "conditions": [
         ["OS==\"win\"", {
