@@ -17,6 +17,12 @@ export const useImageStore = defineStore('image', () => {
   const fftComputeTimeMs = ref(0)
   const spectrumMemName = ref(null)
   
+  const roiPolygon = ref([])
+  const isDrawingROI = ref(false)
+  const dislocationResult = ref(null)
+  const dislocationLoading = ref(false)
+  const selectedDislocationId = ref(null)
+  
   const isImageLoaded = computed(() => imageInfo.value !== null)
   const isFFTReady = computed(() => fftResult.value !== null)
   const isFFTComputing = computed(() => isLoading.value && loadingText.value.includes('FFT'))
@@ -213,6 +219,79 @@ export const useImageStore = defineStore('image', () => {
     releaseSpectrumMemory()
     fftResult.value = null
   }
+  
+  function setROIPolygon(polygon) {
+    roiPolygon.value = polygon || []
+  }
+  
+  function setDrawingROI(drawing) {
+    isDrawingROI.value = drawing
+  }
+  
+  function clearROI() {
+    roiPolygon.value = []
+    isDrawingROI.value = false
+    dislocationResult.value = null
+    selectedDislocationId.value = null
+  }
+  
+  async function analyzeDislocations() {
+    if (!currentFile.value || roiPolygon.value.length < 3) {
+      return { success: false, error: '请先绘制 ROI 多边形区域' }
+    }
+    
+    dislocationLoading.value = true
+    dislocationResult.value = null
+    
+    try {
+      const bounds = getROIBounds()
+      const options = {
+        roiWidth: Math.round(bounds.width),
+        roiHeight: Math.round(bounds.height)
+      }
+      
+      const result = await window.electronAPI.analyzeDislocations(
+        currentFile.value,
+        roiPolygon.value,
+        options
+      )
+      
+      if (result && result.success) {
+        dislocationResult.value = result
+        return { success: true, result }
+      } else {
+        throw new Error(result?.error || '位错分析失败')
+      }
+    } catch (err) {
+      console.error('Dislocation analysis failed:', err)
+      return { success: false, error: err.message }
+    } finally {
+      dislocationLoading.value = false
+    }
+  }
+  
+  function getROIBounds() {
+    if (roiPolygon.value.length === 0) {
+      return { x: 0, y: 0, width: 0, height: 0 }
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const pt of roiPolygon.value) {
+      minX = Math.min(minX, pt.x)
+      minY = Math.min(minY, pt.y)
+      maxX = Math.max(maxX, pt.x)
+      maxY = Math.max(maxY, pt.y)
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+  }
+  
+  function selectDislocation(id) {
+    selectedDislocationId.value = id
+  }
+  
+  function clearDislocationResult() {
+    dislocationResult.value = null
+    selectedDislocationId.value = null
+  }
 
   function clearImage() {
     if (imageData.value) {
@@ -243,9 +322,15 @@ export const useImageStore = defineStore('image', () => {
     sharedMemoryName,
     fftComputeTimeMs,
     spectrumMemName,
+    roiPolygon,
+    isDrawingROI,
+    dislocationResult,
+    dislocationLoading,
+    selectedDislocationId,
     isImageLoaded,
     isFFTReady,
     isFFTComputing,
+    isDislocationReady: computed(() => dislocationResult.value !== null),
     fileSize,
     formattedFileSize,
     loadAddonStatus,
@@ -255,6 +340,13 @@ export const useImageStore = defineStore('image', () => {
     clearFFT,
     clearImage,
     loadSpectrumPixels,
-    releaseSpectrumMemory
+    releaseSpectrumMemory,
+    setROIPolygon,
+    setDrawingROI,
+    clearROI,
+    analyzeDislocations,
+    getROIBounds,
+    selectDislocation,
+    clearDislocationResult
   }
 })

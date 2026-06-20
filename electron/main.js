@@ -260,6 +260,29 @@ ipcMain.handle('sharedmemory:close', async (event, name, size) => {
   return addon.closeSharedMemory(name, size)
 })
 
+ipcMain.handle('dislocation:analyze', async (event, filePath, roiPolygon, options) => {
+  if (!addon) throw new Error('Addon not loaded')
+  if (!addon.analyzeDislocations) {
+    throw new Error('analyzeDislocations not available in current addon')
+  }
+  console.log('[TEM] Starting dislocation GPA analysis...')
+  const result = await addon.analyzeDislocations(filePath, roiPolygon, options)
+  if (result && result.success) {
+    console.log(`[TEM] Dislocation analysis done: ${result.numDislocations} dislocations found in ${result.computeTimeMs}ms`)
+  }
+  return result
+})
+
+ipcMain.handle('dislocation:analyzeFromShared', async (event, memName, width, height, roiPolygon, options) => {
+  if (!addon) throw new Error('Addon not loaded')
+  if (!addon.analyzeDislocationsFromShared) {
+    throw new Error('analyzeDislocationsFromShared not available')
+  }
+  console.log('[TEM] Starting dislocation GPA analysis from shared memory...')
+  const result = await addon.analyzeDislocationsFromShared(memName, width, height, roiPolygon, options)
+  return result
+})
+
 ipcMain.handle('system:info', () => ({
   platform: os.platform(),
   arch: os.arch(),

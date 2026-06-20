@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   writeImageToShared: (memName, imagePath) => ipcRenderer.invoke('sharedmemory:writeImage', memName, imagePath),
   closeSharedMemory: (name, size) => ipcRenderer.invoke('sharedmemory:close', name, size),
   
+  analyzeDislocations: (filePath, roiPolygon, options) => ipcRenderer.invoke('dislocation:analyze', filePath, roiPolygon, options),
+  analyzeDislocationsFromShared: (memName, width, height, roiPolygon, options) => ipcRenderer.invoke('dislocation:analyzeFromShared', memName, width, height, roiPolygon, options),
+  
   getSystemInfo: () => ipcRenderer.invoke('system:info'),
   
   onFileSelected: (callback) => ipcRenderer.on('file-selected', (event, filePath) => callback(filePath)),

@@ -122,6 +122,81 @@
         <el-card shadow="never" style="margin-top: 16px;">
           <template #header>
             <div class="panel-title">
+              <el-icon class="icon"><Connection /></el-icon>
+              <span>位错分析</span>
+            </div>
+          </template>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <el-button 
+              type="warning" 
+              :disabled="!imageStore.isImageLoaded || imageStore.roiPolygon.length < 3 || imageStore.dislocationLoading"
+              @click="runDislocationAnalysis"
+              :loading="imageStore.dislocationLoading"
+            >
+              <el-icon><MagicStick /></el-icon>
+              <span>执行 GPA 位错分析</span>
+            </el-button>
+            <el-button 
+              type="info" 
+              :disabled="imageStore.roiPolygon.length === 0"
+              @click="clearROI"
+              plain
+            >
+              <el-icon><Delete /></el-icon>
+              <span>清除 ROI</span>
+            </el-button>
+          </div>
+
+          <div v-if="imageStore.roiPolygon.length > 0" style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border-color);">
+            <div class="info-row">
+              <span class="info-label">ROI 顶点</span>
+              <span class="info-value">{{ imageStore.roiPolygon.length }} 个</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">ROI 尺寸</span>
+              <span class="info-value">{{ roiBounds.width.toFixed(0) }} × {{ roiBounds.height.toFixed(0) }}</span>
+            </div>
+          </div>
+
+          <div v-if="imageStore.isDislocationReady" style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border-color);">
+            <div class="info-row">
+              <span class="info-label">分析方法</span>
+              <span class="info-value">{{ imageStore.dislocationResult.method }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">位错数量</span>
+              <span class="info-value highlight">{{ imageStore.dislocationResult.numDislocations }} 条</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">计算耗时</span>
+              <span class="info-value">{{ imageStore.dislocationResult.computeTimeMs }} ms</span>
+            </div>
+            
+            <div style="margin-top: 12px;">
+              <div class="section-label" style="font-size: 12px; color: var(--text-secondary); font-weight: 600; margin-bottom: 8px;">检测到位错列表</div>
+              <div style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                <div 
+                  v-for="line in imageStore.dislocationResult.dislocationLines" 
+                  :key="line.id"
+                  class="dislocation-item"
+                  :class="{ active: imageStore.selectedDislocationId === line.id }"
+                  @click="selectDislocation(line.id)"
+                >
+                  <span class="dislocation-type" :class="line.type">
+                    {{ line.typeName }}
+                  </span>
+                  <span class="dislocation-burgers">
+                    b = {{ line.burgersMagnitude_angstrom.toFixed(2) }} Å
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-card>
+
+        <el-card shadow="never" style="margin-top: 16px;">
+          <template #header>
+            <div class="panel-title">
               <el-icon class="icon"><Monitor /></el-icon>
               <span>系统信息</span>
             </div>
@@ -173,6 +248,14 @@
               title="测量 (M)"
             >
               <el-icon><Ruler /></el-icon>
+            </button>
+            <button 
+              class="toolbar-btn" 
+              :class="{ active: toolMode === 'roi' }"
+              @click="toolMode = 'roi'"
+              title="ROI 多边形 (R)"
+            >
+              <el-icon><Grid /></el-icon>
             </button>
             <div class="divider"></div>
             <button 
@@ -226,9 +309,16 @@
             :offset-y="offsetY"
             :is-loading="imageStore.isLoading"
             :loading-text="imageStore.loadingText"
+            :dislocation-lines="imageStore.dislocationResult?.dislocationLines || []"
+            :roi-offset-x="roiBounds.x"
+            :roi-offset-y="roiBounds.y"
+            :selected-dislocation-id="imageStore.selectedDislocationId"
             @update:scale="scale = $event"
             @update:offset-x="offsetX = $event"
             @update:offset-y="offsetY = $event"
+            @roi:update="handleROIUpdate"
+            @roi:complete="handleROIComplete"
+            @roi:clear="handleROIClear"
           />
         </div>
       </main>
@@ -263,7 +353,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useImageStore } from './stores/imageStore'
 import ImageCanvas from './components/ImageCanvas.vue'
@@ -278,6 +368,10 @@ const offsetX = ref(0)
 const offsetY = ref(0)
 const opencvVersion = ref('4.9.0')
 const currentTime = ref('')
+
+const roiBounds = computed(() => {
+  return imageStore.getROIBounds() || { x: 0, y: 0, width: 0, height: 0 }
+})
 
 let timeInterval = null
 
@@ -351,6 +445,45 @@ function exportFFT() {
   ElMessage.success('频谱图已导出')
 }
 
+async function runDislocationAnalysis() {
+  const startTime = performance.now()
+  const result = await imageStore.analyzeDislocations()
+  const duration = (performance.now() - startTime).toFixed(2)
+  
+  if (result.success) {
+    ElMessage.success(`位错分析完成 (${duration} ms) - 检测到 ${result.result.numDislocations} 条位错线`)
+  } else {
+    ElMessage.error(`位错分析失败: ${result.error}`)
+  }
+}
+
+function clearROI() {
+  if (imageCanvasRef.value) {
+    imageCanvasRef.value.clearROI()
+  }
+  imageStore.clearROI()
+  ElMessage.info('ROI 已清除')
+}
+
+function selectDislocation(id) {
+  imageStore.selectDislocation(id)
+}
+
+function handleROIUpdate(e) {
+  imageStore.setROIPolygon(e.polygon)
+  imageStore.setDrawingROI(e.isDrawing)
+}
+
+function handleROIComplete(e) {
+  imageStore.setROIPolygon(e.polygon)
+  imageStore.setDrawingROI(false)
+  ElMessage.success(`ROI 绘制完成，${e.polygon.length} 个顶点`)
+}
+
+function handleROIClear() {
+  imageStore.clearROI()
+}
+
 function zoomIn() {
   scale.value = Math.min(scale.value * 1.2, 10)
 }
@@ -383,6 +516,9 @@ function handleKeydown(e) {
       break
     case 'm':
       toolMode.value = 'measure'
+      break
+    case 'r':
+      toolMode.value = 'roi'
       break
     case '+':
     case '=':
@@ -586,5 +722,50 @@ onUnmounted(() => {
 .empty-state p {
   margin: 0;
   font-size: 13px;
+}
+
+.dislocation-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid transparent;
+}
+
+.dislocation-item:hover {
+  background: var(--accent-blue);
+  border-color: var(--accent-cyan);
+}
+
+.dislocation-item.active {
+  background: var(--accent-blue);
+  border-color: var(--accent-cyan);
+}
+
+.dislocation-type {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: var(--warning);
+  color: white;
+}
+
+.dislocation-type.edge {
+  background: #e94560;
+}
+
+.dislocation-type.screw {
+  background: var(--accent-blue);
+}
+
+.dislocation-burgers {
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--accent-cyan);
+  font-weight: 600;
 }
 </style>
